@@ -1,0 +1,188 @@
+pragma solidity ^0.4.24;
+
+//https://en.bitcoinwiki.org/wiki/ERC20
+//https://eips.ethereum.org/EIPS/eip-20
+
+contract  ERC20Interface {
+    function totalSupply() public view returns (uint);
+    function balanceOf(address tokenOwner) public view returns (uint balance); 
+    function transfer(address to, uint tokens) public returns (bool success);
+    
+    function allowance(address tokenOwner, address spender) public view returns (uint remaining);
+    function approve(address spender, uint tokens) public returns (bool success);
+    function transferFrom(address from, address to, uint tokens) public returns (bool success);
+
+    event Transfer(address indexed from, address indexed to, uint tokens);
+    event Approval(address indexed tokenOwner, address indexed spender, uint tokens);
+}
+
+
+contract Solidark is ERC20Interface {
+    
+    string public constant name = "Solidark";
+    string public constant symbol = "Sol";
+    uint8 public constant decimals = 18;  
+    
+    uint public supply; 
+    address public founder;
+    mapping (address => uint)balances; 
+    mapping (address => mapping (address => uint)) allowed;
+    
+    // allowed [compte1][compte2] = [montant]
+    
+    constructor() public {
+        supply = 3000000;
+        founder = msg.sender;
+        balances[founder] = supply;
+    }
+    
+    
+    function totalSupply() public view returns (uint){
+     return supply;   
+    }
+    function balanceOf(address tokenOwner) public view returns (uint balance){
+        return balances[tokenOwner];
+    }
+    function transfer(address to, uint tokens) public returns (bool success){
+        require(balances[msg.sender]>= tokens && tokens > 0);
+        balances[to] += tokens; // balances[to] = balances[to] + tokens
+        balances[msg.sender] -= tokens; // balances[msg.sender] = balances[msg.sender] - tokens
+        emit Transfer(msg.sender, to, tokens);
+        return true ;
+        
+    }
+    
+    function allowance(address tokenOwner, address spender) public view returns (uint remaining){
+        return allowed [tokenOwner][spender];
+    }
+    function approve(address spender, uint tokens) public returns (bool success){
+        require(balances[msg.sender]>= tokens && tokens > 0);
+        allowed[msg.sender][spender] = tokens;
+        emit Approval(msg.sender, spender, tokens);
+        return true ;
+    }
+    function transferFrom(address from, address to, uint tokens) public returns (bool success){
+        require(allowed[from][to] >= tokens);
+        require(balances[from]>= tokens && tokens > 0);
+        
+        balances[from] -= tokens; 
+        balances[to] += tokens; 
+        allowed[from][to] -= tokens;  // Si tu avais l'autorisation de transférer 30€ et que tu envoies 20€ alors il restera 10€.
+        return true; 
+    }
+
+    event Transfer(address indexed from, address indexed to, uint tokens);
+    event Approval(address indexed tokenOwner, address indexed spender, uint tokens);
+}
+
+
+contract SolidarkICO is Solidark {
+    address public admin ; // Gérer l'opération
+    address public deposit; // adresse qui va recueillir les fonds de l'ICO
+    
+    uint public tokenPrice = 1000000000000000; // 1 MafweToken = 0.001 ethereum
+    uint public hardcap = 300000000000000000000; // Max investissemnt = 300 ethereum
+    
+    uint public RaisedAmount; // Montant de la levée
+    
+    
+    uint public saleStart = now;  // Démarrage de la mafweICO
+    uint public saleEnd = now + 604800; // Fin de l'ICO, 1 semaine en secondes
+    uint public cointTradeStart = saleEnd + 604800; // transférable une semaine après la fin du mafweICO
+    
+    uint public maxInvestment = 5000000000000000000; // 5 ether
+    uint public minInvestment = 1000000000000000; // 0,01 ether
+    
+    enum State {beforeStart, running, afterEnd, halted} // Etat de l'ICO (avant le début, en cours, terminé, interrompu (ça va reprendre))
+    State public icoState;
+    
+    
+    modifier onlyAdmin(){
+        require(msg.sender == admin);
+        _;
+    }
+    
+    event Invest(address investor, uint value, uint token);
+    
+    constructor(address _deposit) public {
+        deposit = _deposit;
+        admin = msg.sender;
+        icoState = State.beforeStart;
+    }
+    
+    // Interruption de l'ICO.
+    function halted() public onlyAdmin {
+        icoState = State.halted;
+        
+    }
+    
+    // Redemarrage de l'ICO
+         function unhalted() public onlyAdmin {
+        icoState = State.running;
+    }
+    
+    function changeDepositAddress (address newDeposit) public onlyAdmin {
+        deposit = newDeposit;
+    
+    }
+
+function getCurrentState() public view returns (State) {
+    
+    if(icoState == State.halted){
+        return State.halted;
+    }else if (block.timestamp < saleStart){
+        return State.beforeStart; 
+    }else if (block.timestamp >= saleStart && block.timestamp <= saleEnd ){  // block.timestamp : Temps actuelle. 
+        return State.running;
+    }else {
+        return State.afterEnd;
+    }
+    
+    }
+    
+    function invest() payable public returns (bool){
+        
+        icoState = getCurrentState();
+        require(icoState == State.running);
+        require( msg.value >= minInvestment && msg.value <= maxInvestment);
+        require(RaisedAmount + msg.value <= hardcap);
+        
+        uint token = msg.value/tokenPrice;
+        RaisedAmount += msg.value;
+        balances[msg.sender] += token;
+        balances[founder] -= token;
+        
+            deposit.transfer(msg.value); // Transférer sur le compte deposit 
+        
+        emit Invest(msg.sender, msg.value, token);
+        
+        return true;
+}
+
+    function () payable public{
+        invest();
+    }
+
+    function burn() public returns (bool)  {     // SUPPRIME LES TOKENS RESTANT qui n'ont pas été vendus pendant l'ICO
+        
+        icoState = getCurrentState();
+        require(icoState == State.afterEnd);
+        balances[founder] = 0 ;
+        return true;
+    } 
+    
+    function transfer(address to, uint value) public returns(bool) {
+     require(block.timestamp > cointTradeStart);
+     super.transfer(to, value);
+     return true;
+     
+    }
+    
+    function transferFrom(address _from, address _to, uint _value) public returns(bool) {
+     require(block.timestamp > cointTradeStart);
+     super.transferFrom(_from, _to, _value);
+     return true;
+    }
+        
+    }
+    
